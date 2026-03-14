@@ -7,7 +7,7 @@ create table if not exists users (
     Password varchar(255) not null,
     Score int not null
 );
-create table match_queue (
+create table match_requests (
     Id int unique not null,
     Score int not null,
     MatchId int unique not null
@@ -27,4 +27,9 @@ create table game_players (
     GameId int not null,
     PlayerId int not null,
     Score int not null
+);
+create table outbox_events (
+    MatchId int unique not null,
+    Statue varchar(255) not null, 
+    check (Statue in ('pending', 'processed', 'failed'))
 );

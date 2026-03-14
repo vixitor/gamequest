@@ -13,3 +13,5 @@ redis里面username和对应的token，在match表格和game表格里面user用t
 还要存每局游戏对应的token和状态
 
 kafka负责消息发布。
+
+createMatchRequest的时候，我本来的想法是直接发kafka消息，然后由consumer处理，但是这样会遇到数据库的写操作不成功，但是消息发送出去了，consumer不知道在处理什么，也可能发kafka消息没有成功，根本就没有处理请求，那处理sql写不成功，为什么不能在error的时候多试几次，或者直接在error的时候不进行create操作

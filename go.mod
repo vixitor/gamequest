@@ -6,6 +6,7 @@ require (
 	github.com/go-redis/redis/v8 v8.11.5
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/gorm v1.31.1
+	github.com/segmentio/kafka-go v0.4.28
 )
 
 require (
