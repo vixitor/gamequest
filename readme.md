@@ -17,3 +17,6 @@ kafka负责消息发布。
 createMatchRequest的时候，我本来的想法是直接发kafka消息，然后由consumer处理，但是这样会遇到数据库的写操作不成功，但是消息发送出去了，consumer不知道在处理什么，也可能发kafka消息没有成功，根本就没有处理请求，那处理sql写不成功，为什么不能在error的时候多试几次，或者直接在error的时候不进行create操作
 
 现在基本上把架构写出来了，register操作和login操作都直接写数据库，没有加任何的保护，客户端发creatematchrequest请求之后，写request sql表格的同时写outbox event表格，之后会有一个producer每隔一段时间扫一遍outbox event表格，把matchid发布到kafka，consumer从kafka里面读数据，之后写redis，matchid可以被匹配，redis里面用了sorted set。matchmaker会间断性的看sorted set里面有没有10个对象可以被撮合，如果有的话就撮合他们。现在撮合100个人要用1m43s
+
+现在先对项目做结构化
+
