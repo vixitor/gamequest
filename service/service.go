@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"gamequest/types"
 	"log"
+	"strconv"
 	"time"
 
 	redis "github.com/go-redis/redis/v8"
@@ -36,12 +37,11 @@ func NewMySQLDB(dsn string) (*gorm.DB, error) {
 }
 
 func (s *Service) GetMatchId() (int, error) {
-	s.redis.Incr(s.ctx, "match_id")
-	matchId, err := s.redis.Get(s.ctx, "match_id").Int()
+	matchId, err := s.redis.Incr(s.ctx, "match_id").Result()
 	if err != nil {
 		return -1, fmt.Errorf("failed to get match ID: %w", err)
 	}
-	return matchId, nil
+	return int(matchId), nil
 }
 
 func (s *Service) GetUserById(userId int) (*types.User, error) {
@@ -109,7 +109,7 @@ func (s *Service) Consumer() {
 		}
 		log.Printf("Received message: %s", string(msg.Value))
 		matchid := 0
-		_, err = fmt.Sscanf(value, "Match ID %d is ready for processing", matchid)
+		_, err = fmt.Sscanf(value, "Match ID %d is ready for processing", &matchid)
 		if err != nil {
 			log.Printf("Failed to parse match ID from message: %v", err)
 			continue
@@ -127,13 +127,64 @@ func (s *Service) MatchMaker() {
         	redis.call('ZREMRANGEBYRANK', KEYS[1], 0, 9)
         	return result `
 		time.Sleep(50 * time.Millisecond)
+		// log.Printf("matchbook size %v\n", s.redis.ZCard(s.ctx, "matchbook").Val())
 		for s.redis.ZCard(s.ctx, "matchbook").Val() >= 10 {
 			result, err := s.redis.Eval(s.ctx, luaScript, []string{"matchbook"}).Result()
 			if err != nil {
 				log.Printf("Failed to execute Lua script: %v", err)
 				continue
 			}
-			log.Printf("Matched players: %v", result)
+			var scores []int
+			var matchids []int
+			for i := 0; i < len(result.([]interface{})); i += 2 {
+				matchId, _ := strconv.Atoi(result.([]interface{})[i].(string))
+				score, _ := strconv.Atoi(result.([]interface{})[i+1].(string))
+				matchids = append(matchids, matchId)
+				scores = append(scores, score)
+			}
+			log.Printf("Matched matchids: %v\n", matchids)
+			log.Printf("Matched Scores %v\n", scores)
+			err = s.db.Transaction(func(tx *gorm.DB) error {
+				for i := 0; i < len(matchids); i += 1 {
+					matchId := matchids[i]
+					if err := tx.Model(&types.MatchRequest{}).Where("match_id = ?", matchId).Update("status", "matched").Error; err != nil {
+						return fmt.Errorf("failed to update match request status for match ID %v: %w", matchId, err)
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				log.Printf("Failed to update match request statuses: %v", err)
+				for i := 0; i < len(matchids); i += 1 {
+					matchId := matchids[i]
+					score := scores[i]
+					s.redis.ZAdd(s.ctx, "matchbook", &redis.Z{Score: float64(score), Member: matchId})
+				}
+			} else {
+				maxScore := 0
+				minScore := 3000
+				for i := 0; i < len(scores); i += 1 {
+					if scores[i] > maxScore {
+						maxScore = scores[i]
+					}
+					if scores[i] < minScore {
+						minScore = scores[i]
+					}
+				}
+				gameinfo := types.GameInfo{MaxScore: maxScore, MinScore: minScore}
+				if err := s.db.Create(&gameinfo).Error; err != nil {
+					log.Printf("Failed to create game info: %v", err)
+				}
+				gameid := gameinfo.GameId
+				for i := 0; i < len(matchids); i += 1 {
+					matchId := matchids[i]
+					game2match := types.Game2Match{GameId: gameid, MatchId: matchId}
+					if err := s.db.Create(&game2match).Error; err != nil {
+						log.Printf("Failed to create game2match record for match ID %d: %v", matchId, err)
+					}
+					log.Printf("Created game2match record for match ID %d and game ID %d", matchId, gameid)
+				}
+			}
 		}
 	}
 }
@@ -146,12 +197,14 @@ func CreateService() (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create MySQLDB: %w", err)
 	}
-	if err := db.AutoMigrate(&types.User{}, &types.MatchRequest{}, &types.MatchHistory{}, &types.GameInfo{}, &types.GamePlayer{}, &types.OutboxEvent{}); err != nil {
+	if err := db.AutoMigrate(&types.User{}, &types.MatchRequest{}, &types.MatchHistory{}, &types.GameInfo{}, &types.Game2Match{}, &types.OutboxEvent{}); err != nil {
 		return nil, fmt.Errorf("failed to migrate tables: %w", err)
 	}
 	log.Println("Service created successfully")
 	service := &Service{db: db, ctx: ctx, redis: redisClient}
 	go service.Producer()
+	go service.Consumer()
+	go service.MatchMaker()
 	return service, nil
 }
 
@@ -188,6 +241,7 @@ func (s *Service) CreateMatchRequest(playerID int, matchId int) (int, error) {
 		PlayId:    playerID,
 		MatchId:   matchId,
 		PlayScore: score,
+		Status:    "pending",
 	}
 	outboxEvent := types.OutboxEvent{
 		MatchId: matchId,
@@ -206,4 +260,33 @@ func (s *Service) CreateMatchRequest(playerID int, matchId int) (int, error) {
 		return -1, fmt.Errorf("failed to create match request: %w", err)
 	}
 	return matchId, nil
+}
+
+func (s *Service) GetMatchRequestStatus(matchId int) string {
+	var matchRequest types.MatchRequest
+	key := fmt.Sprintf("match_request_status:%d", matchId)
+	err := s.redis.Exists(s.ctx, key).Err()
+	if err == nil {
+		status, err := s.redis.Get(s.ctx, key).Result()
+		if err == nil {
+			return status
+		}
+	}
+	result := s.db.Where("match_id = ?", matchId).First(&matchRequest)
+	if result.Error != nil {
+		log.Printf("Failed to get match request status: %v", result.Error)
+		return "pending"
+	}
+	s.redis.Set(s.ctx, key, matchRequest.Status, 3*time.Second)
+	return matchRequest.Status
+}
+
+func (s *Service) GetGameId(matchId int) int {
+	var game2match types.Game2Match
+	result := s.db.Where("match_id = ?", matchId).First(&game2match)
+	if result.Error != nil {
+		log.Printf("Failed to get game ID for match ID %d: %v", matchId, result.Error)
+		return -1
+	}
+	return game2match.GameId
 }

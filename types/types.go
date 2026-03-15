@@ -8,9 +8,10 @@ type User struct {
 }
 
 type MatchRequest struct {
-	PlayId    int `gorm:"not null"`
-	PlayScore int `gorm:"not null"`
-	MatchId   int `gorm:"primaryKey;autoIncrement"`
+	PlayId    int    `gorm:"not null"`
+	PlayScore int    `gorm:"not null"`
+	MatchId   int    `gorm:"primaryKey;autoIncrement"`
+	Status    string `gorm:"size:255;not null"`
 }
 
 type MatchHistory struct {
@@ -21,15 +22,14 @@ type MatchHistory struct {
 }
 
 type GameInfo struct {
-	GameId   int `gorm:"primaryKey;"`
+	GameId   int `gorm:"primaryKey;autoIncrement"`
 	MaxScore int `gorm:"not null"`
 	MinScore int `gorm:"not null"`
 }
 
-type GamePlayer struct {
-	GameId   int `gorm:"not null"`
-	PlayerId int `gorm:"not null"`
-	Score    int `gorm:"not null"`
+type Game2Match struct {
+	GameId  int `gorm:"not null"`
+	MatchId int `gorm:"primaryKey;"`
 }
 
 type OutboxEvent struct {

@@ -10,7 +10,9 @@ create table if not exists users (
 create table match_requests (
     Id int unique not null,
     Score int not null,
-    MatchId int unique not null
+    MatchId int unique not null,
+    Status varchar(255) not null,
+    check (Status in ('pending', 'processing', 'matched', 'failed'))
 ); 
 create table match_history  (
     Id int unique not null, 
